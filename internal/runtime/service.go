@@ -3,8 +3,9 @@ package runtime
 import "context"
 
 type RunRequest struct {
-	Command string
-	Args    []string
+	Hostname string
+	Command  string
+	Args     []string
 }
 
 type ProcessInfo struct {

@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	application := app.New(runtime.NewLocalService())
+	application := app.New(runtime.NewService())
 
 	if err := application.Run(context.Background(), os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
