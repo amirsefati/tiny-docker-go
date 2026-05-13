@@ -1,34 +1,26 @@
+//go:build !linux
+
 package runtime
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"os/exec"
+	"runtime"
 )
 
 type LocalService struct{}
 
-func NewLocalService() *LocalService {
+func NewService() Service {
 	return &LocalService{}
 }
 
-func (s *LocalService) Run(ctx context.Context, request RunRequest) error {
-	if request.Command == "" {
-		return errors.New("command is required")
-	}
+func (s *LocalService) Run(context.Context, RunRequest) error {
+	return fmt.Errorf("run is only supported on Linux; current OS is %s", runtime.GOOS)
+}
 
-	cmd := exec.CommandContext(ctx, request.Command, request.Args...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("execute %q: %w", request.Command, err)
-	}
-
-	return nil
+func (s *LocalService) RunChild(context.Context, RunRequest) error {
+	return fmt.Errorf("child execution is only supported on Linux; current OS is %s", runtime.GOOS)
 }
 
 func (s *LocalService) List(context.Context) ([]ProcessInfo, error) {

@@ -10,21 +10,23 @@ The goal is to grow this project in clear stages:
 4. Add metadata, logging, and lifecycle management.
 5. Explore images, filesystems, and networking later.
 
-## Day 1 scope
+## Day 2 scope
 
-This first version focuses on project structure and command boundaries.
+This version keeps the Day 1 CLI shape and adds the first real Linux isolation primitives to `run`.
 
 Implemented today:
 
-- Go module setup
-- CLI commands: `run`, `ps`, `stop`, `logs`
-- Internal package layout for future runtime work
-- A simple `run` command that executes a normal Linux command without isolation
-- Consistent error handling
+- `run --hostname <name>` flag support
+- UTS namespace setup for container-local hostnames
+- PID namespace setup so container processes get their own PID tree
+- Mount namespace setup so `/proc` can be mounted inside the container view
+- Parent/child process model using `/proc/self/exe`
+- Linux-only runtime implementation with a clear non-Linux fallback error
 
-Not implemented yet:
+Still not implemented:
 
-- Process isolation
+- Filesystem root isolation with `chroot` or `pivot_root`
+- cgroups for resource limits
 - Background containers
 - Persistent container metadata
 - Log storage
@@ -41,13 +43,15 @@ tiny-docker-go/
 │   ├── app/
 │   │   └── app.go
 │   ├── cli/
+│   │   ├── child.go
 │   │   ├── command.go
 │   │   ├── logs.go
 │   │   ├── ps.go
 │   │   ├── run.go
 │   │   └── stop.go
 │   └── runtime/
-│       ├── local_runner.go
+│       ├── service_linux.go
+│       ├── service_unsupported.go
 │       └── service.go
 ├── go.mod
 └── README.md
@@ -55,16 +59,31 @@ tiny-docker-go/
 
 ## Quick start
 
-Build:
+Build for your current OS:
 
 ```bash
 go build ./...
 ```
 
-Run a command:
+On non-Linux hosts, the binary still builds, but `run` returns a clear "Linux only" error.
+
+Build a Linux binary:
 
 ```bash
-go run ./cmd/tiny-docker-go run echo hello
+GOOS=linux GOARCH=amd64 go build -o tiny-docker ./cmd/tiny-docker-go
+```
+
+Run an isolated container command on Linux as root:
+
+```bash
+sudo ./tiny-docker run --hostname test-container /bin/sh
+```
+
+Inside that shell, you can inspect the namespaces:
+
+```bash
+hostname
+ps
 ```
 
 Show placeholders for future lifecycle commands:
@@ -75,12 +94,39 @@ go run ./cmd/tiny-docker-go logs demo
 go run ./cmd/tiny-docker-go stop demo
 ```
 
+## How namespaces work
+
+The new `run` flow uses two stages:
+
+1. The parent process handles CLI parsing and spawns `/proc/self/exe child ...`.
+2. That child starts in fresh Linux namespaces, performs setup, and then replaces itself with the target command.
+
+Why `/proc/self/exe`?
+
+- It points at the current executable.
+- It lets the parent re-run the same binary in a special internal mode.
+- That internal mode is a simple way to separate "create namespaces" from "run the container command".
+
+What each namespace does here:
+
+- UTS namespace:
+  Lets the container see its own hostname. Calling `sethostname` changes the hostname only inside that namespace.
+- PID namespace:
+  Gives the container its own process ID tree. The command you run becomes PID 1 inside the container namespace.
+- Mount namespace:
+  Gives the container its own mount table. That lets us mount a fresh `/proc` without affecting the host.
+
+Why mount `/proc` again?
+
+- `/proc` reflects the current PID namespace.
+- After entering a new PID namespace, mounting `proc` inside the new mount namespace makes tools like `ps` show container-local processes instead of host processes.
+
 ## Design notes
 
 - `cmd/` contains only the entrypoint.
 - `internal/app` wires the CLI to runtime services.
-- `internal/cli` owns argument parsing and command behavior.
-- `internal/runtime` holds process execution and future container lifecycle logic.
+- `internal/cli` owns public command parsing plus the internal `child` entrypoint.
+- `internal/runtime` holds Linux namespace setup and process execution details.
 
 This keeps the early version simple while giving us a place to add:
 
@@ -92,10 +138,10 @@ This keeps the early version simple while giving us a place to add:
 
 ## Next steps
 
-Good Day 2 directions:
+Good Day 3 directions:
 
 - add a container ID and basic metadata model
 - store process state on disk
 - capture logs to files
 - support detached execution
-- begin Linux namespace experiments
+- add root filesystem isolation
