@@ -4,6 +4,7 @@ import "context"
 
 type RunRequest struct {
 	Hostname string
+	RootFS   string
 	Command  string
 	Args     []string
 }

@@ -10,22 +10,26 @@ The goal is to grow this project in clear stages:
 4. Add metadata, logging, and lifecycle management.
 5. Explore images, filesystems, and networking later.
 
-## Day 2 scope
+## Day 3 scope
 
-This version keeps the Day 1 CLI shape and adds the first real Linux isolation primitives to `run`.
+This version keeps the earlier CLI shape and adds simple root filesystem isolation to `run`.
 
 Implemented today:
 
 - `run --hostname <name>` flag support
+- `run --rootfs <path>` flag support for a local root filesystem
 - UTS namespace setup for container-local hostnames
 - PID namespace setup so container processes get their own PID tree
 - Mount namespace setup so `/proc` can be mounted inside the container view
+- `chroot` into the selected root filesystem
+- working directory change to `/` after entering the container root
+- `/proc` mount cleanup after the container command exits
 - Parent/child process model using `/proc/self/exe`
 - Linux-only runtime implementation with a clear non-Linux fallback error
 
 Still not implemented:
 
-- Filesystem root isolation with `chroot` or `pivot_root`
+- Strong filesystem isolation with `pivot_root`, mount propagation rules, and bind-mount setup
 - cgroups for resource limits
 - Background containers
 - Persistent container metadata
@@ -76,7 +80,7 @@ GOOS=linux GOARCH=amd64 go build -o tiny-docker ./cmd/tiny-docker-go
 Run an isolated container command on Linux as root:
 
 ```bash
-sudo ./tiny-docker run --hostname test-container /bin/sh
+sudo ./tiny-docker run --hostname test-container --rootfs ./rootfs/alpine /bin/sh
 ```
 
 Inside that shell, you can inspect the namespaces:
@@ -121,6 +125,16 @@ Why mount `/proc` again?
 - `/proc` reflects the current PID namespace.
 - After entering a new PID namespace, mounting `proc` inside the new mount namespace makes tools like `ps` show container-local processes instead of host processes.
 
+## `chroot` vs Docker
+
+This project now uses `chroot` as a simple teaching step.
+
+- `chroot` changes what a process sees as `/`.
+- It does not build a full container filesystem model by itself.
+- Real Docker typically combines mount namespaces, carefully prepared mount trees, overlay filesystems, bind mounts, `pivot_root`, cgroups, capabilities, seccomp, and more.
+
+So in this project, `chroot` gives us a local root filesystem view, but it is not the same security boundary or filesystem isolation model that Docker provides in production.
+
 ## Design notes
 
 - `cmd/` contains only the entrypoint.
@@ -144,4 +158,4 @@ Good Day 3 directions:
 - store process state on disk
 - capture logs to files
 - support detached execution
-- add root filesystem isolation
+- improve filesystem isolation beyond basic `chroot`
