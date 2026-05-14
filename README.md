@@ -10,9 +10,9 @@ The goal is to grow this project in clear stages:
 4. Add metadata, logging, and lifecycle management.
 5. Explore images, filesystems, and networking later.
 
-## Day 3 scope
+## Day 4 scope
 
-This version keeps the earlier CLI shape and adds simple root filesystem isolation to `run`.
+This version keeps the earlier namespace and `chroot` work, and adds basic container metadata management.
 
 Implemented today:
 
@@ -24,6 +24,11 @@ Implemented today:
 - `chroot` into the selected root filesystem
 - working directory change to `/` after entering the container root
 - `/proc` mount cleanup after the container command exits
+- generated container IDs for each `run`
+- local metadata storage under `/var/lib/tiny-docker/containers/<id>/config.json`
+- stored container fields: `id`, `command`, `hostname`, `rootfs`, `status`, `created_at`, `pid`
+- `ps` implementation backed by saved container metadata
+- container state refresh for stale `running` entries when `ps` runs
 - Parent/child process model using `/proc/self/exe`
 - Linux-only runtime implementation with a clear non-Linux fallback error
 
@@ -31,10 +36,9 @@ Still not implemented:
 
 - Strong filesystem isolation with `pivot_root`, mount propagation rules, and bind-mount setup
 - cgroups for resource limits
-- Background containers
-- Persistent container metadata
 - Log storage
 - Real stop semantics
+- Background containers
 
 ## Project layout
 
@@ -54,6 +58,7 @@ tiny-docker-go/
 │   │   ├── run.go
 │   │   └── stop.go
 │   └── runtime/
+│       ├── metadata_store.go
 │       ├── service_linux.go
 │       ├── service_unsupported.go
 │       └── service.go
@@ -90,10 +95,15 @@ hostname
 ps
 ```
 
+List tracked containers:
+
+```bash
+sudo ./tiny-docker ps
+```
+
 Show placeholders for future lifecycle commands:
 
 ```bash
-go run ./cmd/tiny-docker-go ps
 go run ./cmd/tiny-docker-go logs demo
 go run ./cmd/tiny-docker-go stop demo
 ```
@@ -135,6 +145,38 @@ This project now uses `chroot` as a simple teaching step.
 
 So in this project, `chroot` gives us a local root filesystem view, but it is not the same security boundary or filesystem isolation model that Docker provides in production.
 
+## Metadata layout
+
+Each container now gets a generated ID and a local directory:
+
+```text
+/var/lib/tiny-docker/containers/<id>/
+└── config.json
+```
+
+The `config.json` file stores:
+
+- `id`
+- `command`
+- `hostname`
+- `rootfs`
+- `status`
+- `created_at`
+- `pid`
+
+This gives the runtime a simple local source of truth for `ps` and later lifecycle features.
+
+## How Docker tracks state conceptually
+
+Conceptually, Docker keeps a metadata record for each container outside the container process itself.
+
+- The runtime creates a container identity and stores config plus state on disk.
+- It updates that state as the container moves through lifecycle stages such as created, running, stopped, or exited.
+- Commands like `docker ps` read from that metadata plus live runtime signals rather than scanning arbitrary processes and guessing.
+- Lower-level runtimes such as `containerd` and `runc` handle the actual process execution, while higher layers keep the durable state model in sync.
+
+This project now mirrors that idea in a much simpler form: one folder per container, one JSON file for config and state, and a `ps` command that reads those records.
+
 ## Design notes
 
 - `cmd/` contains only the entrypoint.
@@ -152,10 +194,9 @@ This keeps the early version simple while giving us a place to add:
 
 ## Next steps
 
-Good Day 3 directions:
+Good next directions:
 
-- add a container ID and basic metadata model
-- store process state on disk
 - capture logs to files
 - support detached execution
 - improve filesystem isolation beyond basic `chroot`
+- add a real stop flow that updates metadata

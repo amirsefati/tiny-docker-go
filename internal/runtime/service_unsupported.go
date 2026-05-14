@@ -24,7 +24,23 @@ func (s *LocalService) RunChild(context.Context, RunRequest) error {
 }
 
 func (s *LocalService) List(context.Context) ([]ProcessInfo, error) {
-	return []ProcessInfo{}, nil
+	store := NewMetadataStore(defaultContainersRoot)
+	containers, err := store.List()
+	if err != nil {
+		return nil, fmt.Errorf("load containers: %w", err)
+	}
+
+	processes := make([]ProcessInfo, 0, len(containers))
+	for _, container := range containers {
+		processes = append(processes, ProcessInfo{
+			ID:      container.ID,
+			Status:  string(container.Status),
+			PID:     container.PID,
+			Command: container.Command,
+		})
+	}
+
+	return processes, nil
 }
 
 func (s *LocalService) Logs(context.Context, string) (string, error) {

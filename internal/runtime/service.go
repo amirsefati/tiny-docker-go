@@ -1,6 +1,16 @@
 package runtime
 
-import "context"
+import (
+	"context"
+	"time"
+)
+
+type ContainerStatus string
+
+const (
+	StatusRunning ContainerStatus = "running"
+	StatusStopped ContainerStatus = "stopped"
+)
 
 type RunRequest struct {
 	Hostname string
@@ -12,7 +22,18 @@ type RunRequest struct {
 type ProcessInfo struct {
 	ID      string
 	Status  string
+	PID     int
 	Command string
+}
+
+type ContainerConfig struct {
+	ID        string          `json:"id"`
+	Command   string          `json:"command"`
+	Hostname  string          `json:"hostname"`
+	RootFS    string          `json:"rootfs"`
+	Status    ContainerStatus `json:"status"`
+	CreatedAt time.Time       `json:"created_at"`
+	PID       int             `json:"pid"`
 }
 
 type Service interface {

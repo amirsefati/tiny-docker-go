@@ -27,13 +27,13 @@ func (c *PSCommand) Execute(ctx context.Context, args []string) error {
 		return err
 	}
 
-	_, err = fmt.Fprintln(c.stdout, "ID\tSTATUS\tCOMMAND")
+	_, err = fmt.Fprintln(c.stdout, "ID\tSTATUS\tPID\tCOMMAND")
 	if err != nil {
 		return err
 	}
 
 	for _, process := range processes {
-		if _, err := fmt.Fprintf(c.stdout, "%s\t%s\t%s\n", process.ID, process.Status, process.Command); err != nil {
+		if _, err := fmt.Fprintf(c.stdout, "%s\t%s\t%d\t%s\n", process.ID, process.Status, process.PID, process.Command); err != nil {
 			return err
 		}
 	}
