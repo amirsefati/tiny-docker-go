@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"path/filepath"
 
 	"tiny-docker-go/internal/runtime"
 )
@@ -32,9 +33,19 @@ func parseRunRequest(args []string) (runtime.RunRequest, error) {
 	flagSet.SetOutput(io.Discard)
 
 	hostname := flagSet.String("hostname", "", "container hostname")
+	rootfs := flagSet.String("rootfs", "", "path to container root filesystem")
 
 	if err := flagSet.Parse(args); err != nil {
 		return runtime.RunRequest{}, fmt.Errorf("parse run flags: %w", err)
+	}
+
+	resolvedRootFS := *rootfs
+	if resolvedRootFS != "" {
+		absRootFS, err := filepath.Abs(resolvedRootFS)
+		if err != nil {
+			return runtime.RunRequest{}, fmt.Errorf("resolve rootfs path: %w", err)
+		}
+		resolvedRootFS = absRootFS
 	}
 
 	remaining := flagSet.Args()
@@ -44,6 +55,7 @@ func parseRunRequest(args []string) (runtime.RunRequest, error) {
 
 	return runtime.RunRequest{
 		Hostname: *hostname,
+		RootFS:   resolvedRootFS,
 		Command:  remaining[0],
 		Args:     remaining[1:],
 	}, nil

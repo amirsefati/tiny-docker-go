@@ -28,6 +28,9 @@ func (s *LocalService) Run(ctx context.Context, request RunRequest) error {
 	if request.Hostname != "" {
 		childArgs = append(childArgs, "--hostname", request.Hostname)
 	}
+	if request.RootFS != "" {
+		childArgs = append(childArgs, "--rootfs", request.RootFS)
+	}
 	childArgs = append(childArgs, request.Command)
 	childArgs = append(childArgs, request.Args...)
 
@@ -61,9 +64,26 @@ func (s *LocalService) RunChild(_ context.Context, request RunRequest) error {
 		return fmt.Errorf("make mounts private: %w", err)
 	}
 
+	if request.RootFS != "" {
+		if err := syscall.Chroot(request.RootFS); err != nil {
+			return fmt.Errorf("chroot into %q: %w", request.RootFS, err)
+		}
+	}
+
+	if err := syscall.Chdir("/"); err != nil {
+		return fmt.Errorf("change working directory: %w", err)
+	}
+
+	if err := os.MkdirAll("/proc", 0o555); err != nil {
+		return fmt.Errorf("ensure /proc mount point: %w", err)
+	}
+
 	if err := syscall.Mount("proc", "/proc", "proc", 0, ""); err != nil {
 		return fmt.Errorf("mount proc: %w", err)
 	}
+	defer func() {
+		_ = syscall.Unmount("/proc", 0)
+	}()
 
 	commandPath, err := exec.LookPath(request.Command)
 	if err != nil {
@@ -71,8 +91,15 @@ func (s *LocalService) RunChild(_ context.Context, request RunRequest) error {
 	}
 
 	commandArgs := append([]string{request.Command}, request.Args...)
-	if err := syscall.Exec(commandPath, commandArgs, os.Environ()); err != nil {
-		return fmt.Errorf("exec command %q: %w", request.Command, err)
+	cmd := exec.Command(commandPath, request.Args...)
+	cmd.Args = commandArgs
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = os.Environ()
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("run command %q: %w", request.Command, err)
 	}
 
 	return nil
