@@ -6,7 +6,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"runtime"
+	"time"
 )
 
 type LocalService struct{}
@@ -43,8 +46,60 @@ func (s *LocalService) List(context.Context) ([]ProcessInfo, error) {
 	return processes, nil
 }
 
-func (s *LocalService) Logs(context.Context, string) (string, error) {
-	return "log storage is not implemented yet", nil
+func (s *LocalService) Logs(_ context.Context, id string) (string, error) {
+	store := NewMetadataStore(defaultContainersRoot)
+	if _, err := store.Load(id); err != nil {
+		return "", fmt.Errorf("load container metadata: %w", err)
+	}
+
+	data, err := os.ReadFile(store.LogPath(id))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+
+		return "", fmt.Errorf("read container log file: %w", err)
+	}
+
+	return string(data), nil
+}
+
+func (s *LocalService) FollowLogs(ctx context.Context, id string, output io.Writer) error {
+	store := NewMetadataStore(defaultContainersRoot)
+	if _, err := store.Load(id); err != nil {
+		return fmt.Errorf("load container metadata: %w", err)
+	}
+
+	logFile, err := os.OpenFile(store.LogPath(id), os.O_CREATE|os.O_RDONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("open container log file: %w", err)
+	}
+	defer logFile.Close()
+
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+
+	var offset int64
+
+	for {
+		position, err := logFile.Seek(offset, io.SeekStart)
+		if err != nil {
+			return fmt.Errorf("seek container log file: %w", err)
+		}
+		offset = position
+
+		copied, err := io.Copy(output, logFile)
+		offset += copied
+		if err != nil {
+			return fmt.Errorf("stream container log file: %w", err)
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func (s *LocalService) Stop(context.Context, string) error {

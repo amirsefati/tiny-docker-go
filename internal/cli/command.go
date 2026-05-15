@@ -22,6 +22,7 @@ type ChildExecutor interface {
 type ProcessReader interface {
 	List(context.Context) ([]runtime.ProcessInfo, error)
 	Logs(context.Context, string) (string, error)
+	FollowLogs(context.Context, string, io.Writer) error
 	Stop(context.Context, string) error
 }
 
@@ -85,7 +86,7 @@ func (c *Command) usageError(message string) error {
 	builder.WriteString("  tiny-docker-go run [--hostname name] [--rootfs path] <command> [args...]\n")
 	builder.WriteString("  tiny-docker-go ps\n")
 	builder.WriteString("  tiny-docker-go stop <id>\n")
-	builder.WriteString("  tiny-docker-go logs <id>\n")
+	builder.WriteString("  tiny-docker-go logs [-f] <id>\n")
 
 	return fmt.Errorf(builder.String())
 }
