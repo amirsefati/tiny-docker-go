@@ -13,6 +13,7 @@ import (
 )
 
 const defaultContainersRoot = "/var/lib/tiny-docker/containers"
+const containerLogFileName = "container.log"
 
 type MetadataStore struct {
 	root string
@@ -40,7 +41,7 @@ func (s *MetadataStore) NewContainer(request RunRequest) (ContainerConfig, error
 }
 
 func (s *MetadataStore) Save(config ContainerConfig) error {
-	containerDir := filepath.Join(s.root, config.ID)
+	containerDir := s.ContainerDir(config.ID)
 	if err := os.MkdirAll(containerDir, 0o755); err != nil {
 		return fmt.Errorf("create container directory: %w", err)
 	}
@@ -79,7 +80,7 @@ func (s *MetadataStore) List() ([]ContainerConfig, error) {
 			continue
 		}
 
-		config, err := s.load(entry.Name())
+		config, err := s.Load(entry.Name())
 		if err != nil {
 			return nil, err
 		}
@@ -94,7 +95,7 @@ func (s *MetadataStore) List() ([]ContainerConfig, error) {
 	return configs, nil
 }
 
-func (s *MetadataStore) load(id string) (ContainerConfig, error) {
+func (s *MetadataStore) Load(id string) (ContainerConfig, error) {
 	configPath := filepath.Join(s.root, id, "config.json")
 	data, err := os.ReadFile(configPath)
 	if err != nil {
@@ -107,6 +108,14 @@ func (s *MetadataStore) load(id string) (ContainerConfig, error) {
 	}
 
 	return config, nil
+}
+
+func (s *MetadataStore) ContainerDir(id string) string {
+	return filepath.Join(s.root, id)
+}
+
+func (s *MetadataStore) LogPath(id string) string {
+	return filepath.Join(s.ContainerDir(id), containerLogFileName)
 }
 
 func generateContainerID() (string, error) {

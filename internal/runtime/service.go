@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"io"
 	"time"
 )
 
@@ -40,5 +41,6 @@ type Service interface {
 	Run(context.Context, RunRequest) error
 	List(context.Context) ([]ProcessInfo, error)
 	Logs(context.Context, string) (string, error)
+	FollowLogs(context.Context, string, io.Writer) error
 	Stop(context.Context, string) error
 }

@@ -10,9 +10,9 @@ The goal is to grow this project in clear stages:
 4. Add metadata, logging, and lifecycle management.
 5. Explore images, filesystems, and networking later.
 
-## Day 4 scope
+## Day 5 scope
 
-This version keeps the earlier namespace and `chroot` work, and adds basic container metadata management.
+This version keeps the earlier namespace and `chroot` work, and adds basic log management.
 
 Implemented today:
 
@@ -26,9 +26,13 @@ Implemented today:
 - `/proc` mount cleanup after the container command exits
 - generated container IDs for each `run`
 - local metadata storage under `/var/lib/tiny-docker/containers/<id>/config.json`
+- local log storage under `/var/lib/tiny-docker/containers/<id>/container.log`
 - stored container fields: `id`, `command`, `hostname`, `rootfs`, `status`, `created_at`, `pid`
 - `ps` implementation backed by saved container metadata
 - container state refresh for stale `running` entries when `ps` runs
+- `logs <id>` implementation backed by `container.log`
+- `logs -f <id>` follow support for running containers
+- stdout and stderr mirrored to both the terminal and the container log file
 - Parent/child process model using `/proc/self/exe`
 - Linux-only runtime implementation with a clear non-Linux fallback error
 
@@ -36,7 +40,6 @@ Still not implemented:
 
 - Strong filesystem isolation with `pivot_root`, mount propagation rules, and bind-mount setup
 - cgroups for resource limits
-- Log storage
 - Real stop semantics
 - Background containers
 
@@ -101,12 +104,14 @@ List tracked containers:
 sudo ./tiny-docker ps
 ```
 
-Show placeholders for future lifecycle commands:
+Read saved logs:
 
 ```bash
-go run ./cmd/tiny-docker-go logs demo
-go run ./cmd/tiny-docker-go stop demo
+sudo ./tiny-docker logs <container-id>
+sudo ./tiny-docker logs -f <container-id>
 ```
+
+`stop` is still a placeholder in this version.
 
 ## How namespaces work
 
@@ -151,7 +156,8 @@ Each container now gets a generated ID and a local directory:
 
 ```text
 /var/lib/tiny-docker/containers/<id>/
-└── config.json
+├── config.json
+└── container.log
 ```
 
 The `config.json` file stores:
@@ -165,6 +171,8 @@ The `config.json` file stores:
 - `pid`
 
 This gives the runtime a simple local source of truth for `ps` and later lifecycle features.
+
+The `container.log` file stores the combined stdout and stderr stream for each container.
 
 ## How Docker tracks state conceptually
 
@@ -189,14 +197,12 @@ This keeps the early version simple while giving us a place to add:
 - process metadata stores
 - namespace and cgroup setup
 - background execution
-- log persistence
 - networking
 
 ## Next steps
 
 Good next directions:
 
-- capture logs to files
 - support detached execution
 - improve filesystem isolation beyond basic `chroot`
 - add a real stop flow that updates metadata

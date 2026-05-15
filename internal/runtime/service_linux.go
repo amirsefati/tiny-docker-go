@@ -6,9 +6,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"syscall"
+	"time"
 )
 
 const currentExecutable = "/proc/self/exe"
@@ -43,15 +45,29 @@ func (s *LocalService) Run(ctx context.Context, request RunRequest) error {
 		return fmt.Errorf("create container metadata: %w", err)
 	}
 
+	if err := s.store.Save(container); err != nil {
+		return fmt.Errorf("persist container metadata: %w", err)
+	}
+
+	logFile, err := os.OpenFile(s.store.LogPath(container.ID), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return fmt.Errorf("open container log file: %w", err)
+	}
+	defer logFile.Close()
+
 	cmd := exec.CommandContext(ctx, currentExecutable, childArgs...)
 	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = io.MultiWriter(os.Stdout, logFile)
+	cmd.Stderr = io.MultiWriter(os.Stderr, logFile)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS,
 	}
 
 	if err := cmd.Start(); err != nil {
+		container.Status = StatusStopped
+		if saveErr := s.store.Save(container); saveErr != nil {
+			return fmt.Errorf("start container init: %w (metadata update failed: %v)", err, saveErr)
+		}
 		return fmt.Errorf("start container init: %w", err)
 	}
 
@@ -177,8 +193,72 @@ func refreshContainerStatus(container ContainerConfig) ContainerConfig {
 	return container
 }
 
-func (s *LocalService) Logs(context.Context, string) (string, error) {
-	return "log storage is not implemented yet", nil
+func (s *LocalService) Logs(_ context.Context, id string) (string, error) {
+	if _, err := s.store.Load(id); err != nil {
+		return "", fmt.Errorf("load container metadata: %w", err)
+	}
+
+	data, err := os.ReadFile(s.store.LogPath(id))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+
+		return "", fmt.Errorf("read container log file: %w", err)
+	}
+
+	return string(data), nil
+}
+
+func (s *LocalService) FollowLogs(ctx context.Context, id string, output io.Writer) error {
+	if _, err := s.store.Load(id); err != nil {
+		return fmt.Errorf("load container metadata: %w", err)
+	}
+
+	logFile, err := os.OpenFile(s.store.LogPath(id), os.O_CREATE|os.O_RDONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("open container log file: %w", err)
+	}
+	defer logFile.Close()
+
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+
+	var offset int64
+
+	for {
+		bytesWritten, err := logFile.Seek(offset, io.SeekStart)
+		if err != nil {
+			return fmt.Errorf("seek container log file: %w", err)
+		}
+		offset = bytesWritten
+
+		copied, err := io.Copy(output, logFile)
+		offset += copied
+		if err != nil {
+			return fmt.Errorf("stream container log file: %w", err)
+		}
+
+		container, err := s.store.Load(id)
+		if err != nil {
+			return fmt.Errorf("refresh container metadata: %w", err)
+		}
+
+		container = refreshContainerStatus(container)
+		if err := s.store.Save(container); err != nil {
+			return fmt.Errorf("refresh followed container metadata: %w", err)
+		}
+
+		if container.Status != StatusRunning && copied == 0 {
+			return nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func (s *LocalService) Stop(context.Context, string) error {
