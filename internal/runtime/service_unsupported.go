@@ -36,10 +36,11 @@ func (s *LocalService) List(context.Context) ([]ProcessInfo, error) {
 	processes := make([]ProcessInfo, 0, len(containers))
 	for _, container := range containers {
 		processes = append(processes, ProcessInfo{
-			ID:      container.ID,
-			Status:  string(container.Status),
-			PID:     container.PID,
-			Command: container.Command,
+			ID:        container.ID,
+			Status:    string(container.Status),
+			PID:       container.PID,
+			CreatedAt: container.CreatedAt,
+			Command:   container.Command,
 		})
 	}
 
@@ -103,5 +104,5 @@ func (s *LocalService) FollowLogs(ctx context.Context, id string, output io.Writ
 }
 
 func (s *LocalService) Stop(context.Context, string) error {
-	return errors.New("stop is not implemented yet")
+	return errors.New("stop is only supported on Linux")
 }

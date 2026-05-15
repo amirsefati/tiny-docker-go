@@ -9,8 +9,10 @@ import (
 type ContainerStatus string
 
 const (
+	StatusCreated ContainerStatus = "created"
 	StatusRunning ContainerStatus = "running"
 	StatusStopped ContainerStatus = "stopped"
+	StatusExited  ContainerStatus = "exited"
 )
 
 type RunRequest struct {
@@ -21,10 +23,11 @@ type RunRequest struct {
 }
 
 type ProcessInfo struct {
-	ID      string
-	Status  string
-	PID     int
-	Command string
+	ID        string
+	Status    string
+	PID       int
+	CreatedAt time.Time
+	Command   string
 }
 
 type ContainerConfig struct {

@@ -10,9 +10,9 @@ The goal is to grow this project in clear stages:
 4. Add metadata, logging, and lifecycle management.
 5. Explore images, filesystems, and networking later.
 
-## Day 5 scope
+## Day 6 scope
 
-This version keeps the earlier namespace and `chroot` work, and adds basic log management.
+This version keeps the earlier namespace and `chroot` work, and adds basic container lifecycle management.
 
 Implemented today:
 
@@ -28,11 +28,14 @@ Implemented today:
 - local metadata storage under `/var/lib/tiny-docker/containers/<id>/config.json`
 - local log storage under `/var/lib/tiny-docker/containers/<id>/container.log`
 - stored container fields: `id`, `command`, `hostname`, `rootfs`, `status`, `created_at`, `pid`
+- lifecycle statuses: `created`, `running`, `stopped`, `exited`
 - `ps` implementation backed by saved container metadata
-- container state refresh for stale `running` entries when `ps` runs
+- `ps` output improved with cleaner columns and container creation time
+- container state refresh for stale `running` entries when `ps` and `logs -f` run
 - `logs <id>` implementation backed by `container.log`
 - `logs -f <id>` follow support for running containers
 - stdout and stderr mirrored to both the terminal and the container log file
+- `stop <id>` implementation with `SIGTERM` followed by `SIGKILL` fallback
 - Parent/child process model using `/proc/self/exe`
 - Linux-only runtime implementation with a clear non-Linux fallback error
 
@@ -40,7 +43,6 @@ Still not implemented:
 
 - Strong filesystem isolation with `pivot_root`, mount propagation rules, and bind-mount setup
 - cgroups for resource limits
-- Real stop semantics
 - Background containers
 
 ## Project layout
@@ -111,7 +113,11 @@ sudo ./tiny-docker logs <container-id>
 sudo ./tiny-docker logs -f <container-id>
 ```
 
-`stop` is still a placeholder in this version.
+Stop a running container:
+
+```bash
+sudo ./tiny-docker stop <container-id>
+```
 
 ## How namespaces work
 
@@ -174,6 +180,13 @@ This gives the runtime a simple local source of truth for `ps` and later lifecyc
 
 The `container.log` file stores the combined stdout and stderr stream for each container.
 
+Status values used now:
+
+- `created`: metadata exists, but the container process has not been started yet
+- `running`: the container init process is alive
+- `stopped`: the container was explicitly stopped through the runtime
+- `exited`: the container process ended on its own or was discovered to be gone later
+
 ## How Docker tracks state conceptually
 
 Conceptually, Docker keeps a metadata record for each container outside the container process itself.
@@ -184,6 +197,27 @@ Conceptually, Docker keeps a metadata record for each container outside the cont
 - Lower-level runtimes such as `containerd` and `runc` handle the actual process execution, while higher layers keep the durable state model in sync.
 
 This project now mirrors that idea in a much simpler form: one folder per container, one JSON file for config and state, and a `ps` command that reads those records.
+
+## How container process management works
+
+At a low level, a container here is still just a normal Linux process tree with some extra isolation.
+
+- The runtime starts a child process in new namespaces.
+- That child becomes the container's init-like process from the host's point of view.
+- The host keeps the real host PID in metadata so later commands like `ps`, `logs`, and `stop` know which process to manage.
+- `stop` works by sending signals to that host PID, not by reaching into the container shell directly.
+
+Why `SIGTERM` first?
+
+- `SIGTERM` asks the process to exit cleanly.
+- Well-behaved programs can flush logs, close files, and shut down in order.
+- If the process ignores the signal or gets stuck, the runtime escalates to `SIGKILL`, which the kernel enforces immediately.
+
+Why do statuses need refreshing?
+
+- Processes can exit without the runtime being actively watching from another command.
+- Because of that, commands like `ps` refresh saved `running` containers by checking whether the recorded PID still exists.
+- If the PID is gone, the runtime updates metadata so the saved state stays aligned with reality.
 
 ## Design notes
 
@@ -205,4 +239,4 @@ Good next directions:
 
 - support detached execution
 - improve filesystem isolation beyond basic `chroot`
-- add a real stop flow that updates metadata
+- add background container supervision and reaping

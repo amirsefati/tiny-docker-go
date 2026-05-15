@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
+	"text/tabwriter"
 )
 
 type PSCommand struct {
@@ -27,16 +29,24 @@ func (c *PSCommand) Execute(ctx context.Context, args []string) error {
 		return err
 	}
 
-	_, err = fmt.Fprintln(c.stdout, "ID\tSTATUS\tPID\tCOMMAND")
+	writer := tabwriter.NewWriter(c.stdout, 0, 0, 2, ' ', 0)
+
+	_, err = fmt.Fprintln(writer, "ID\tSTATUS\tPID\tCREATED\tCOMMAND")
 	if err != nil {
 		return err
 	}
 
 	for _, process := range processes {
-		if _, err := fmt.Fprintf(c.stdout, "%s\t%s\t%d\t%s\n", process.ID, process.Status, process.PID, process.Command); err != nil {
+		pid := "-"
+		if process.PID > 0 {
+			pid = strconv.Itoa(process.PID)
+		}
+
+		createdAt := process.CreatedAt.Local().Format("2006-01-02 15:04:05")
+		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n", process.ID, process.Status, pid, createdAt, process.Command); err != nil {
 			return err
 		}
 	}
 
-	return nil
+	return writer.Flush()
 }
