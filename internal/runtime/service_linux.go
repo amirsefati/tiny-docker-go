@@ -14,6 +14,8 @@ import (
 )
 
 const currentExecutable = "/proc/self/exe"
+const stopGracePeriod = 2 * time.Second
+const stopPollInterval = 100 * time.Millisecond
 
 type LocalService struct {
 	store *MetadataStore
@@ -71,6 +73,7 @@ func (s *LocalService) Run(ctx context.Context, request RunRequest) error {
 		return fmt.Errorf("start container init: %w", err)
 	}
 
+	container.Status = StatusRunning
 	container.PID = cmd.Process.Pid
 	if err := s.store.Save(container); err != nil {
 		_ = cmd.Process.Kill()
@@ -80,7 +83,14 @@ func (s *LocalService) Run(ctx context.Context, request RunRequest) error {
 
 	waitErr := cmd.Wait()
 
-	container.Status = StatusStopped
+	latestContainer, err := s.store.Load(container.ID)
+	if err == nil {
+		container = latestContainer
+	}
+
+	if container.Status != StatusStopped {
+		container.Status = StatusExited
+	}
 	container.PID = 0
 
 	if err := s.store.Save(container); err != nil {
@@ -168,10 +178,11 @@ func (s *LocalService) List(context.Context) ([]ProcessInfo, error) {
 		}
 
 		processes = append(processes, ProcessInfo{
-			ID:      container.ID,
-			Status:  string(container.Status),
-			PID:     container.PID,
-			Command: container.Command,
+			ID:        container.ID,
+			Status:    string(container.Status),
+			PID:       container.PID,
+			CreatedAt: container.CreatedAt,
+			Command:   container.Command,
 		})
 	}
 
@@ -187,7 +198,7 @@ func refreshContainerStatus(container ContainerConfig) ContainerConfig {
 		return container
 	}
 
-	container.Status = StatusStopped
+	container.Status = StatusExited
 	container.PID = 0
 
 	return container
@@ -261,6 +272,84 @@ func (s *LocalService) FollowLogs(ctx context.Context, id string, output io.Writ
 	}
 }
 
-func (s *LocalService) Stop(context.Context, string) error {
-	return errors.New("stop is not implemented yet")
+func (s *LocalService) Stop(ctx context.Context, id string) error {
+	container, err := s.store.Load(id)
+	if err != nil {
+		return fmt.Errorf("load container metadata: %w", err)
+	}
+
+	container = refreshContainerStatus(container)
+	if err := s.store.Save(container); err != nil {
+		return fmt.Errorf("refresh container metadata: %w", err)
+	}
+
+	if container.Status != StatusRunning || container.PID <= 0 {
+		return fmt.Errorf("container is not running (status: %s)", container.Status)
+	}
+
+	if err := syscall.Kill(container.PID, syscall.SIGTERM); err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			container.Status = StatusExited
+			container.PID = 0
+			if saveErr := s.store.Save(container); saveErr != nil {
+				return fmt.Errorf("mark already-exited container: %w", saveErr)
+			}
+			return nil
+		}
+
+		return fmt.Errorf("send SIGTERM: %w", err)
+	}
+
+	stopped, err := waitForProcessExit(ctx, container.PID, stopGracePeriod)
+	if err != nil {
+		return err
+	}
+
+	if !stopped {
+		if err := syscall.Kill(container.PID, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+			return fmt.Errorf("send SIGKILL: %w", err)
+		}
+
+		stopped, err = waitForProcessExit(ctx, container.PID, stopGracePeriod)
+		if err != nil {
+			return err
+		}
+		if !stopped {
+			return errors.New("process did not exit after SIGKILL")
+		}
+	}
+
+	container.Status = StatusStopped
+	container.PID = 0
+	if err := s.store.Save(container); err != nil {
+		return fmt.Errorf("save stopped container metadata: %w", err)
+	}
+
+	return nil
+}
+
+func waitForProcessExit(ctx context.Context, pid int, timeout time.Duration) (bool, error) {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+
+	ticker := time.NewTicker(stopPollInterval)
+	defer ticker.Stop()
+
+	for {
+		if err := syscall.Kill(pid, 0); err != nil {
+			if errors.Is(err, syscall.ESRCH) {
+				return true, nil
+			}
+
+			return false, fmt.Errorf("check process state: %w", err)
+		}
+
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-deadline.C:
+			return false, nil
+		case <-ticker.C:
+		}
+	}
 }

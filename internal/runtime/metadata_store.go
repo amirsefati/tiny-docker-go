@@ -34,7 +34,7 @@ func (s *MetadataStore) NewContainer(request RunRequest) (ContainerConfig, error
 		Command:   strings.Join(append([]string{request.Command}, request.Args...), " "),
 		Hostname:  request.Hostname,
 		RootFS:    request.RootFS,
-		Status:    StatusRunning,
+		Status:    StatusCreated,
 		CreatedAt: time.Now().UTC(),
 		PID:       0,
 	}, nil
