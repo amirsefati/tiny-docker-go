@@ -32,12 +32,21 @@ func (s *LocalService) Run(ctx context.Context, request RunRequest) error {
 		return errors.New("command is required")
 	}
 
+	network, err := newNetworkConfig(request.Network)
+	if err != nil {
+		return fmt.Errorf("configure network mode: %w", err)
+	}
+	request.Network = network.Mode()
+
 	childArgs := []string{"child"}
 	if request.Hostname != "" {
 		childArgs = append(childArgs, "--hostname", request.Hostname)
 	}
 	if request.RootFS != "" {
 		childArgs = append(childArgs, "--rootfs", request.RootFS)
+	}
+	if request.Network != "" {
+		childArgs = append(childArgs, "--net", request.Network)
 	}
 	childArgs = append(childArgs, request.Command)
 	childArgs = append(childArgs, request.Args...)
@@ -62,7 +71,7 @@ func (s *LocalService) Run(ctx context.Context, request RunRequest) error {
 	cmd.Stdout = io.MultiWriter(os.Stdout, logFile)
 	cmd.Stderr = io.MultiWriter(os.Stderr, logFile)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS,
+		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS | network.CloneFlags(),
 	}
 
 	cgroup, err := newCgroupManager(container.ID)
@@ -146,6 +155,11 @@ func (s *LocalService) RunChild(_ context.Context, request RunRequest) error {
 		return errors.New("command is required")
 	}
 
+	network, err := newNetworkConfig(request.Network)
+	if err != nil {
+		return fmt.Errorf("configure child network mode: %w", err)
+	}
+
 	if request.Hostname != "" {
 		if err := syscall.Sethostname([]byte(request.Hostname)); err != nil {
 			return fmt.Errorf("set hostname: %w", err)
@@ -176,6 +190,13 @@ func (s *LocalService) RunChild(_ context.Context, request RunRequest) error {
 	defer func() {
 		_ = syscall.Unmount("/proc", 0)
 	}()
+
+	configurator := network.Configurator()
+	if configurator != nil {
+		if err := configurator.Setup(); err != nil {
+			return fmt.Errorf("setup container network: %w", err)
+		}
+	}
 
 	commandPath, err := exec.LookPath(request.Command)
 	if err != nil {

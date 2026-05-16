@@ -35,6 +35,7 @@ func (s *MetadataStore) NewContainer(request RunRequest) (ContainerConfig, error
 		Hostname:    request.Hostname,
 		RootFS:      request.RootFS,
 		MemoryLimit: request.Memory,
+		NetworkMode: request.Network,
 		Status:      StatusCreated,
 		CreatedAt:   time.Now().UTC(),
 		PID:         0,
