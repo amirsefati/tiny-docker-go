@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 )
 
 type StopCommand struct {
@@ -11,6 +13,11 @@ type StopCommand struct {
 }
 
 func (c *StopCommand) Execute(ctx context.Context, args []string) error {
+	if isHelpRequest(args) {
+		_, err := io.WriteString(os.Stdout, stopHelpText())
+		return err
+	}
+
 	if len(args) != 1 {
 		return errors.New("stop requires exactly one container ID")
 	}
@@ -20,4 +27,13 @@ func (c *StopCommand) Execute(ctx context.Context, args []string) error {
 	}
 
 	return nil
+}
+
+func stopHelpText() string {
+	return `Usage:
+  tiny-docker-go stop <container-id>
+
+Description:
+  Send SIGTERM to the tracked container process, then fall back to SIGKILL if it does not exit in time.
+`
 }

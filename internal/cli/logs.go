@@ -14,6 +14,11 @@ type LogsCommand struct {
 }
 
 func (c *LogsCommand) Execute(ctx context.Context, args []string) error {
+	if isHelpRequest(args) {
+		_, err := io.WriteString(c.stdout, logsHelpText())
+		return err
+	}
+
 	flagSet := flag.NewFlagSet("logs", flag.ContinueOnError)
 	flagSet.SetOutput(io.Discard)
 
@@ -43,4 +48,17 @@ func (c *LogsCommand) Execute(ctx context.Context, args []string) error {
 
 	_, err = io.WriteString(c.stdout, logs)
 	return err
+}
+
+func logsHelpText() string {
+	return `Usage:
+  tiny-docker-go logs [-f] <container-id>
+
+Options:
+  -f    Follow the log stream until the container exits or the command is interrupted
+
+Examples:
+  tiny-docker-go logs ab12cd34ef56
+  tiny-docker-go logs -f ab12cd34ef56
+`
 }

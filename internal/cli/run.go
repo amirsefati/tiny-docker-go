@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 
 	"tiny-docker-go/internal/runtime"
@@ -16,6 +17,11 @@ type RunCommand struct {
 }
 
 func (c *RunCommand) Execute(ctx context.Context, args []string) error {
+	if isHelpRequest(args) {
+		_, err := io.WriteString(os.Stdout, runHelpText())
+		return err
+	}
+
 	request, err := parseRunRequest(args)
 	if err != nil {
 		return err
@@ -63,4 +69,24 @@ func parseRunRequest(args []string) (runtime.RunRequest, error) {
 		Command:  remaining[0],
 		Args:     remaining[1:],
 	}, nil
+}
+
+func runHelpText() string {
+	return `Usage:
+  tiny-docker-go run [--hostname name] [--rootfs path] [--memory limit] [--net mode] <command> [args...]
+
+Options:
+  --hostname string   Set the container hostname inside the UTS namespace
+  --rootfs path       Chroot into a local root filesystem before running the command
+  --memory limit      Apply a cgroup v2 memory limit such as 64m, 128m, or 1g
+  --net mode          Network mode: isolated or none (default: isolated)
+
+Examples:
+  tiny-docker-go run --rootfs ./rootfs/alpine /bin/sh
+  tiny-docker-go run --hostname demo --rootfs ./rootfs/alpine /bin/sh
+  tiny-docker-go run --memory 128m --net isolated --rootfs ./rootfs/alpine /bin/sh
+
+Notes:
+  This command requires Linux privileges for namespaces, mounts, networking, and cgroups.
+`
 }

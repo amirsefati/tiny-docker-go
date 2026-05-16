@@ -15,6 +15,11 @@ type PSCommand struct {
 }
 
 func (c *PSCommand) Execute(ctx context.Context, args []string) error {
+	if isHelpRequest(args) {
+		_, err := io.WriteString(c.stdout, psHelpText())
+		return err
+	}
+
 	if len(args) != 0 {
 		return errors.New("ps does not accept arguments")
 	}
@@ -49,4 +54,13 @@ func (c *PSCommand) Execute(ctx context.Context, args []string) error {
 	}
 
 	return writer.Flush()
+}
+
+func psHelpText() string {
+	return `Usage:
+  tiny-docker-go ps
+
+Description:
+  List tracked containers from metadata stored under /var/lib/tiny-docker/containers.
+`
 }
