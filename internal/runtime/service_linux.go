@@ -32,11 +32,11 @@ func (s *LocalService) Run(ctx context.Context, request RunRequest) error {
 		return errors.New("command is required")
 	}
 
-	network, err := newNetworkConfig(request.Network)
+	normalizedNetwork, err := normalizeNetworkMode(request.Network)
 	if err != nil {
 		return fmt.Errorf("configure network mode: %w", err)
 	}
-	request.Network = network.Mode()
+	request.Network = normalizedNetwork
 
 	childArgs := []string{"child"}
 	if request.Hostname != "" {
@@ -56,6 +56,20 @@ func (s *LocalService) Run(ctx context.Context, request RunRequest) error {
 		return fmt.Errorf("create container metadata: %w", err)
 	}
 
+	var networkSettings *networkSettings
+	if request.Network == NetworkModeIsolated {
+		networkSettings, err = allocateIsolatedNetworkSettings(s.store, container.ID)
+		if err != nil {
+			return fmt.Errorf("allocate container network: %w", err)
+		}
+		container.IPAddress = networkSettings.ContainerIP
+	}
+
+	network, err := newNetworkConfig(request.Network, networkSettings)
+	if err != nil {
+		return fmt.Errorf("prepare network configuration: %w", err)
+	}
+
 	if err := s.store.Save(container); err != nil {
 		return fmt.Errorf("persist container metadata: %w", err)
 	}
@@ -70,6 +84,7 @@ func (s *LocalService) Run(ctx context.Context, request RunRequest) error {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = io.MultiWriter(os.Stdout, logFile)
 	cmd.Stderr = io.MultiWriter(os.Stderr, logFile)
+	cmd.Env = append(os.Environ(), network.EnvironmentVariables()...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS | network.CloneFlags(),
 	}
@@ -115,6 +130,20 @@ func (s *LocalService) Run(ctx context.Context, request RunRequest) error {
 		return fmt.Errorf("attach container to cgroup: %w", err)
 	}
 
+	networkCleanup, err := network.SetupHostSide(cmd.Process.Pid)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		container.Status = StatusStopped
+		container.PID = 0
+		if saveErr := s.store.Save(container); saveErr != nil {
+			return fmt.Errorf("setup host network: %w (metadata update failed: %v)", err, saveErr)
+		}
+
+		return fmt.Errorf("setup host network: %w", err)
+	}
+	defer networkCleanup()
+
 	container.Status = StatusRunning
 	container.PID = cmd.Process.Pid
 	if err := s.store.Save(container); err != nil {
@@ -155,7 +184,7 @@ func (s *LocalService) RunChild(_ context.Context, request RunRequest) error {
 		return errors.New("command is required")
 	}
 
-	network, err := newNetworkConfig(request.Network)
+	network, err := newNetworkConfig(request.Network, nil)
 	if err != nil {
 		return fmt.Errorf("configure child network mode: %w", err)
 	}
@@ -168,6 +197,13 @@ func (s *LocalService) RunChild(_ context.Context, request RunRequest) error {
 
 	if err := syscall.Mount("", "/", "", syscall.MS_REC|syscall.MS_PRIVATE, ""); err != nil {
 		return fmt.Errorf("make mounts private: %w", err)
+	}
+
+	configurator := network.Configurator()
+	if configurator != nil {
+		if err := configurator.Setup(); err != nil {
+			return fmt.Errorf("setup container network: %w", err)
+		}
 	}
 
 	if request.RootFS != "" {
@@ -190,13 +226,6 @@ func (s *LocalService) RunChild(_ context.Context, request RunRequest) error {
 	defer func() {
 		_ = syscall.Unmount("/proc", 0)
 	}()
-
-	configurator := network.Configurator()
-	if configurator != nil {
-		if err := configurator.Setup(); err != nil {
-			return fmt.Errorf("setup container network: %w", err)
-		}
-	}
 
 	commandPath, err := exec.LookPath(request.Command)
 	if err != nil {

@@ -39,6 +39,7 @@ type ContainerConfig struct {
 	RootFS      string          `json:"rootfs"`
 	MemoryLimit string          `json:"memory_limit,omitempty"`
 	NetworkMode string          `json:"network_mode,omitempty"`
+	IPAddress   string          `json:"ip_address,omitempty"`
 	Status      ContainerStatus `json:"status"`
 	CreatedAt   time.Time       `json:"created_at"`
 	PID         int             `json:"pid"`

@@ -10,9 +10,9 @@ The goal is to grow this project in clear stages:
 4. Add metadata, logging, and lifecycle management.
 5. Explore images, filesystems, and networking later.
 
-## Day 8 scope
+## Day 9 scope
 
-This version keeps the earlier namespace, `chroot`, lifecycle, and cgroup work, and adds a first network namespace step.
+This version keeps the earlier namespace, `chroot`, lifecycle, and cgroup work, and adds simple container networking through a Linux bridge, a veth pair, and NAT.
 
 Implemented today:
 
@@ -27,7 +27,7 @@ Implemented today:
 - generated container IDs for each `run`
 - local metadata storage under `/var/lib/tiny-docker/containers/<id>/config.json`
 - local log storage under `/var/lib/tiny-docker/containers/<id>/container.log`
-- stored container fields: `id`, `command`, `hostname`, `rootfs`, `memory_limit`, `network_mode`, `status`, `created_at`, `pid`
+- stored container fields: `id`, `command`, `hostname`, `rootfs`, `memory_limit`, `network_mode`, `ip_address`, `status`, `created_at`, `pid`
 - lifecycle statuses: `created`, `running`, `stopped`, `exited`
 - `ps` implementation backed by saved container metadata
 - `ps` output improved with cleaner columns and container creation time
@@ -43,14 +43,25 @@ Implemented today:
 - `run --net isolated` and `run --net none` flag support
 - network namespace setup with `CLONE_NEWNET`
 - loopback interface brought up inside the container namespace
-- network setup separated into a small runtime helper for future bridge/veth expansion
+- host bridge creation as `td0`
+- bridge address assignment as `10.10.0.1/24`
+- host-side veth creation for isolated containers
+- one side of the veth pair moved into the container network namespace and renamed to `eth0`
+- container IP allocation from the `10.10.0.0/24` subnet
+- container interface address assignment such as `10.10.0.2/24`
+- container default route via `10.10.0.1`
+- IPv4 forwarding enabled on the host
+- host NAT rules added with `iptables` so containers can reach the outside network
+- host veth cleanup when the container exits
+- network setup separated into a small runtime helper for bridge/veth/NAT management
 - Parent/child process model using `/proc/self/exe`
 - Linux-only runtime implementation with a clear non-Linux fallback error
 
 Still not implemented:
 
 - Strong filesystem isolation with `pivot_root`, mount propagation rules, and bind-mount setup
-- External container networking through bridges, veth pairs, NAT, and DNS setup
+- DNS configuration inside the container root filesystem
+- Port publishing from host to container
 - Background containers
 
 ## Project layout
@@ -184,41 +195,56 @@ Inside a new network namespace, the process gets its own:
 
 That means a process inside the container can listen on port `8080` without colliding with something on host port `8080`, because those ports now live in different network namespaces.
 
-For Day 8, this project does the smallest useful version:
+The runtime now does two layers of setup:
 
 1. Start the container in a fresh network namespace with `CLONE_NEWNET`.
 2. Bring up the `lo` interface inside that namespace.
-3. Leave all external networking unconfigured for now.
+3. On the host, ensure a bridge called `td0` exists.
+4. Give that bridge the gateway address `10.10.0.1/24`.
+5. Create a veth pair, which acts like a virtual Ethernet cable.
+6. Keep one end on the host and attach it to `td0`.
+7. Move the other end into the container namespace and rename it to `eth0`.
+8. Inside the container namespace, assign an address like `10.10.0.2/24` to `eth0`.
+9. Bring `eth0` up and add a default route through `10.10.0.1`.
+10. On the host, enable IPv4 forwarding and add `iptables` MASQUERADE rules.
 
-Why bring up loopback?
+Why bring up loopback first?
 
 - many programs expect `127.0.0.1` to work
 - local services inside the container may talk to themselves over loopback
 - a brand-new network namespace usually starts with loopback present but down
 
-So after this change, `localhost` works inside the container, but external networking still does not.
+So after this change, `localhost` works inside the container and the container can also send traffic toward the host bridge and then out to the internet through NAT.
 
-## Why the container initially has no internet
+## How the Day 9 networking path works
 
-Creating a network namespace does not automatically connect it to anything.
+Think of the packet path like this:
 
-After `CLONE_NEWNET`, the container does not inherit the host's:
+```text
+container process
+  -> eth0 inside the container namespace
+  -> veth peer
+  -> td0 bridge on the host
+  -> host routing + iptables MASQUERADE
+  -> external network
+```
 
-- ethernet or Wi-Fi interfaces
-- default route
-- DNS wiring
-- bridge attachment
-- NAT rules
+Each step has a small job:
 
-It starts as a separate network stack with only loopback enabled by us. That is why `ping 127.0.0.1` can work, while reaching the public internet does not.
+- `td0` is the container-side switch on the host. Multiple containers can later plug into the same bridge.
+- the veth pair is the cable between namespaces. Packets that leave one end appear on the other end.
+- `10.10.0.1/24` on `td0` is the container subnet gateway.
+- `10.10.0.x/24` on the container's `eth0` gives the container an address on that subnet.
+- the default route tells the container "send non-local traffic to `10.10.0.1`".
+- IPv4 forwarding tells the Linux kernel it may route packets between interfaces.
+- the `iptables` MASQUERADE rule rewrites the source IP from `10.10.0.x` to the host's outward-facing address so replies can come back.
 
-To give the container internet later, we will need more plumbing on the host side, usually:
+Why NAT is needed here:
 
-- a veth pair
-- a Linux bridge
-- an IP address inside the container
-- a default route
-- NAT or another forwarding setup
+- the `10.10.0.0/24` subnet is private and only exists locally on the host
+- outside machines do not know how to route replies back to `10.10.0.2`
+- MASQUERADE makes outbound packets look like they came from the host instead
+- reply packets come back to the host, and connection tracking maps them back to the container
 
 ## Networking modes right now
 
@@ -227,7 +253,10 @@ The project currently supports these flags:
 - `--net isolated`
 - `--net none`
 
-Right now both modes use a fresh network namespace with only loopback brought up. The separate names are mainly there to prepare the CLI and code structure for future modes where `isolated` may mean "connected through our own bridge/veth setup" while `none` stays "loopback only".
+Both modes use a fresh network namespace, but they now differ on purpose:
+
+- `isolated` means "new network namespace plus bridge/veth/NAT connectivity"
+- `none` means "new network namespace with only loopback"
 
 Example checks inside the container:
 
@@ -235,12 +264,16 @@ Example checks inside the container:
 hostname
 ping -c 1 127.0.0.1
 ping -c 1 1.1.1.1
+ip addr show eth0
+ip route
 ```
 
 Expected behavior:
 
 - `127.0.0.1` should work once loopback is up
-- public IPs should fail until bridge/veth networking is added
+- `eth0` should have an address like `10.10.0.2/24`
+- the default route should point to `10.10.0.1`
+- public IPs should work if the host has network access and `iptables` is available
 
 ## `chroot` vs Docker
 
@@ -270,6 +303,7 @@ The `config.json` file stores:
 - `rootfs`
 - `memory_limit`
 - `network_mode`
+- `ip_address`
 - `status`
 - `created_at`
 - `pid`
@@ -390,7 +424,7 @@ For a `64m` run, that file should contain `67108864`.
 - `cmd/` contains only the entrypoint.
 - `internal/app` wires the CLI to runtime services.
 - `internal/cli` owns public command parsing plus the internal `child` entrypoint.
-- `internal/runtime` holds Linux namespace setup, process execution, cgroup logic, and the first network namespace helpers.
+- `internal/runtime` holds Linux namespace setup, process execution, cgroup logic, and the bridge/veth/NAT networking helpers.
 
 This keeps the early version simple while giving us a place to add:
 
@@ -407,5 +441,6 @@ Good next directions:
 - support detached execution
 - improve filesystem isolation beyond basic `chroot`
 - record more runtime state such as cgroup paths or exit codes
-- add bridge/veth creation and host-side routing setup
+- add DNS setup such as writing `/etc/resolv.conf` inside the container rootfs
+- add port forwarding from host ports into container ports
 - add background container supervision and reaping
