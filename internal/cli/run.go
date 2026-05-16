@@ -35,6 +35,7 @@ func parseRunRequest(args []string) (runtime.RunRequest, error) {
 	hostname := flagSet.String("hostname", "", "container hostname")
 	rootfs := flagSet.String("rootfs", "", "path to container root filesystem")
 	memory := flagSet.String("memory", "", "memory limit, for example 128m")
+	network := flagSet.String("net", "isolated", "network mode: isolated or none")
 
 	if err := flagSet.Parse(args); err != nil {
 		return runtime.RunRequest{}, fmt.Errorf("parse run flags: %w", err)
@@ -58,6 +59,7 @@ func parseRunRequest(args []string) (runtime.RunRequest, error) {
 		Hostname: *hostname,
 		RootFS:   resolvedRootFS,
 		Memory:   *memory,
+		Network:  *network,
 		Command:  remaining[0],
 		Args:     remaining[1:],
 	}, nil

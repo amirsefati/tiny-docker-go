@@ -10,9 +10,9 @@ The goal is to grow this project in clear stages:
 4. Add metadata, logging, and lifecycle management.
 5. Explore images, filesystems, and networking later.
 
-## Day 7 scope
+## Day 8 scope
 
-This version keeps the earlier namespace and `chroot` work, and adds basic container lifecycle management plus a first cgroup integration.
+This version keeps the earlier namespace, `chroot`, lifecycle, and cgroup work, and adds a first network namespace step.
 
 Implemented today:
 
@@ -27,7 +27,7 @@ Implemented today:
 - generated container IDs for each `run`
 - local metadata storage under `/var/lib/tiny-docker/containers/<id>/config.json`
 - local log storage under `/var/lib/tiny-docker/containers/<id>/container.log`
-- stored container fields: `id`, `command`, `hostname`, `rootfs`, `memory_limit`, `status`, `created_at`, `pid`
+- stored container fields: `id`, `command`, `hostname`, `rootfs`, `memory_limit`, `network_mode`, `status`, `created_at`, `pid`
 - lifecycle statuses: `created`, `running`, `stopped`, `exited`
 - `ps` implementation backed by saved container metadata
 - `ps` output improved with cleaner columns and container creation time
@@ -40,12 +40,17 @@ Implemented today:
 - cgroup v2 memory limits through `run --memory <value>`
 - automatic PID attachment to the container cgroup after process start
 - cgroup cleanup after the container exits
+- `run --net isolated` and `run --net none` flag support
+- network namespace setup with `CLONE_NEWNET`
+- loopback interface brought up inside the container namespace
+- network setup separated into a small runtime helper for future bridge/veth expansion
 - Parent/child process model using `/proc/self/exe`
 - Linux-only runtime implementation with a clear non-Linux fallback error
 
 Still not implemented:
 
 - Strong filesystem isolation with `pivot_root`, mount propagation rules, and bind-mount setup
+- External container networking through bridges, veth pairs, NAT, and DNS setup
 - Background containers
 
 ## Project layout
@@ -68,6 +73,7 @@ tiny-docker-go/
 │   └── runtime/
 │       ├── cgroup_linux.go
 │       ├── metadata_store.go
+│       ├── network_linux.go
 │       ├── service_linux.go
 │       ├── service_unsupported.go
 │       └── service.go
@@ -101,6 +107,12 @@ Run with a memory limit:
 
 ```bash
 sudo ./tiny-docker run --memory 128m --rootfs ./rootfs/alpine /bin/sh
+```
+
+Run with an isolated network namespace:
+
+```bash
+sudo ./tiny-docker run --net isolated --rootfs ./rootfs/alpine /bin/sh
 ```
 
 Inside that shell, you can inspect the namespaces:
@@ -150,11 +162,85 @@ What each namespace does here:
   Gives the container its own process ID tree. The command you run becomes PID 1 inside the container namespace.
 - Mount namespace:
   Gives the container its own mount table. That lets us mount a fresh `/proc` without affecting the host.
+- Network namespace:
+  Gives the container its own network stack. Interfaces, routes, firewall state, and ports are separate from the host.
 
 Why mount `/proc` again?
 
 - `/proc` reflects the current PID namespace.
 - After entering a new PID namespace, mounting `proc` inside the new mount namespace makes tools like `ps` show container-local processes instead of host processes.
+
+## How Linux network namespaces work
+
+A Linux network namespace gives a process its own private copy of the networking world.
+
+Inside a new network namespace, the process gets its own:
+
+- network interfaces
+- routing table
+- firewall state
+- port bindings
+- ARP and neighbor tables
+
+That means a process inside the container can listen on port `8080` without colliding with something on host port `8080`, because those ports now live in different network namespaces.
+
+For Day 8, this project does the smallest useful version:
+
+1. Start the container in a fresh network namespace with `CLONE_NEWNET`.
+2. Bring up the `lo` interface inside that namespace.
+3. Leave all external networking unconfigured for now.
+
+Why bring up loopback?
+
+- many programs expect `127.0.0.1` to work
+- local services inside the container may talk to themselves over loopback
+- a brand-new network namespace usually starts with loopback present but down
+
+So after this change, `localhost` works inside the container, but external networking still does not.
+
+## Why the container initially has no internet
+
+Creating a network namespace does not automatically connect it to anything.
+
+After `CLONE_NEWNET`, the container does not inherit the host's:
+
+- ethernet or Wi-Fi interfaces
+- default route
+- DNS wiring
+- bridge attachment
+- NAT rules
+
+It starts as a separate network stack with only loopback enabled by us. That is why `ping 127.0.0.1` can work, while reaching the public internet does not.
+
+To give the container internet later, we will need more plumbing on the host side, usually:
+
+- a veth pair
+- a Linux bridge
+- an IP address inside the container
+- a default route
+- NAT or another forwarding setup
+
+## Networking modes right now
+
+The project currently supports these flags:
+
+- `--net isolated`
+- `--net none`
+
+Right now both modes use a fresh network namespace with only loopback brought up. The separate names are mainly there to prepare the CLI and code structure for future modes where `isolated` may mean "connected through our own bridge/veth setup" while `none` stays "loopback only".
+
+Example checks inside the container:
+
+```sh
+hostname
+ping -c 1 127.0.0.1
+ping -c 1 1.1.1.1
+```
+
+Expected behavior:
+
+- `127.0.0.1` should work once loopback is up
+- public IPs should fail until bridge/veth networking is added
 
 ## `chroot` vs Docker
 
@@ -183,6 +269,7 @@ The `config.json` file stores:
 - `hostname`
 - `rootfs`
 - `memory_limit`
+- `network_mode`
 - `status`
 - `created_at`
 - `pid`
@@ -303,12 +390,13 @@ For a `64m` run, that file should contain `67108864`.
 - `cmd/` contains only the entrypoint.
 - `internal/app` wires the CLI to runtime services.
 - `internal/cli` owns public command parsing plus the internal `child` entrypoint.
-- `internal/runtime` holds Linux namespace setup and process execution details.
+- `internal/runtime` holds Linux namespace setup, process execution, cgroup logic, and the first network namespace helpers.
 
 This keeps the early version simple while giving us a place to add:
 
 - process metadata stores
 - namespace and cgroup setup
+- bridge and veth networking helpers
 - background execution
 - networking
 
@@ -319,4 +407,5 @@ Good next directions:
 - support detached execution
 - improve filesystem isolation beyond basic `chroot`
 - record more runtime state such as cgroup paths or exit codes
+- add bridge/veth creation and host-side routing setup
 - add background container supervision and reaping

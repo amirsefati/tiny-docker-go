@@ -19,6 +19,7 @@ type RunRequest struct {
 	Hostname string
 	RootFS   string
 	Memory   string
+	Network  string
 	Command  string
 	Args     []string
 }
@@ -37,6 +38,7 @@ type ContainerConfig struct {
 	Hostname    string          `json:"hostname"`
 	RootFS      string          `json:"rootfs"`
 	MemoryLimit string          `json:"memory_limit,omitempty"`
+	NetworkMode string          `json:"network_mode,omitempty"`
 	Status      ContainerStatus `json:"status"`
 	CreatedAt   time.Time       `json:"created_at"`
 	PID         int             `json:"pid"`
