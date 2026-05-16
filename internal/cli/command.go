@@ -83,7 +83,7 @@ func (c *Command) usageError(message string) error {
 	}
 
 	builder.WriteString("usage:\n")
-	builder.WriteString("  tiny-docker-go run [--hostname name] [--rootfs path] <command> [args...]\n")
+	builder.WriteString("  tiny-docker-go run [--hostname name] [--rootfs path] [--memory limit] <command> [args...]\n")
 	builder.WriteString("  tiny-docker-go ps\n")
 	builder.WriteString("  tiny-docker-go stop <id>\n")
 	builder.WriteString("  tiny-docker-go logs [-f] <id>\n")

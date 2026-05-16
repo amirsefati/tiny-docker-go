@@ -10,9 +10,9 @@ The goal is to grow this project in clear stages:
 4. Add metadata, logging, and lifecycle management.
 5. Explore images, filesystems, and networking later.
 
-## Day 6 scope
+## Day 7 scope
 
-This version keeps the earlier namespace and `chroot` work, and adds basic container lifecycle management.
+This version keeps the earlier namespace and `chroot` work, and adds basic container lifecycle management plus a first cgroup integration.
 
 Implemented today:
 
@@ -27,7 +27,7 @@ Implemented today:
 - generated container IDs for each `run`
 - local metadata storage under `/var/lib/tiny-docker/containers/<id>/config.json`
 - local log storage under `/var/lib/tiny-docker/containers/<id>/container.log`
-- stored container fields: `id`, `command`, `hostname`, `rootfs`, `status`, `created_at`, `pid`
+- stored container fields: `id`, `command`, `hostname`, `rootfs`, `memory_limit`, `status`, `created_at`, `pid`
 - lifecycle statuses: `created`, `running`, `stopped`, `exited`
 - `ps` implementation backed by saved container metadata
 - `ps` output improved with cleaner columns and container creation time
@@ -36,13 +36,16 @@ Implemented today:
 - `logs -f <id>` follow support for running containers
 - stdout and stderr mirrored to both the terminal and the container log file
 - `stop <id>` implementation with `SIGTERM` followed by `SIGKILL` fallback
+- per-container cgroup creation under `/sys/fs/cgroup/tiny-docker/<id>`
+- cgroup v2 memory limits through `run --memory <value>`
+- automatic PID attachment to the container cgroup after process start
+- cgroup cleanup after the container exits
 - Parent/child process model using `/proc/self/exe`
 - Linux-only runtime implementation with a clear non-Linux fallback error
 
 Still not implemented:
 
 - Strong filesystem isolation with `pivot_root`, mount propagation rules, and bind-mount setup
-- cgroups for resource limits
 - Background containers
 
 ## Project layout
@@ -63,6 +66,7 @@ tiny-docker-go/
 │   │   ├── run.go
 │   │   └── stop.go
 │   └── runtime/
+│       ├── cgroup_linux.go
 │       ├── metadata_store.go
 │       ├── service_linux.go
 │       ├── service_unsupported.go
@@ -91,6 +95,12 @@ Run an isolated container command on Linux as root:
 
 ```bash
 sudo ./tiny-docker run --hostname test-container --rootfs ./rootfs/alpine /bin/sh
+```
+
+Run with a memory limit:
+
+```bash
+sudo ./tiny-docker run --memory 128m --rootfs ./rootfs/alpine /bin/sh
 ```
 
 Inside that shell, you can inspect the namespaces:
@@ -172,6 +182,7 @@ The `config.json` file stores:
 - `command`
 - `hostname`
 - `rootfs`
+- `memory_limit`
 - `status`
 - `created_at`
 - `pid`
@@ -219,6 +230,74 @@ Why do statuses need refreshing?
 - Because of that, commands like `ps` refresh saved `running` containers by checking whether the recorded PID still exists.
 - If the PID is gone, the runtime updates metadata so the saved state stays aligned with reality.
 
+## How cgroups work
+
+Cgroups are a Linux kernel feature for putting processes into a named group and applying resource rules to that group.
+
+For this project, the important idea is:
+
+- namespaces change what the container can see
+- cgroups change how much of a resource the container can use
+
+So if namespaces are about isolation, cgroups are about limits and accounting.
+
+This Day 7 version uses cgroup v2 like this:
+
+1. Create a directory for the container under `/sys/fs/cgroup/tiny-docker/<id>`.
+2. If `--memory` was provided, write the limit into `memory.max`.
+3. Start the container process and write its host PID into `cgroup.procs`.
+4. Wait for the process to exit, then remove the cgroup directory.
+
+Example:
+
+```bash
+sudo ./tiny-docker run --memory 128m --rootfs ./rootfs/alpine /bin/sh
+```
+
+That means the whole container process tree gets a memory budget of 128 MiB.
+
+Current limitation:
+
+- this implementation expects cgroup v2 to be available at `/sys/fs/cgroup`
+- if the host only has cgroup v1, `run` will return a clear error instead of silently ignoring the limit
+
+## Testing the memory limit
+
+You need a Linux host with cgroup v2 enabled and enough privileges to create cgroups.
+
+First, verify cgroup v2 is present:
+
+```bash
+test -f /sys/fs/cgroup/cgroup.controllers && echo "cgroup v2 ready"
+```
+
+Then start a shell with a small limit:
+
+```bash
+sudo ./tiny-docker run --memory 64m --rootfs ./rootfs/alpine /bin/sh
+```
+
+Inside the container shell, try to allocate more than that limit:
+
+```sh
+python3 -c 'chunks=[]; [chunks.append(bytearray(10*1024*1024)) for _ in range(20)]'
+```
+
+If `python3` is not available in the rootfs, try BusyBox tools to stress memory from another package set, or build a rootfs that includes Python.
+
+What you should see:
+
+- the allocation command should fail or the process should be killed by the kernel
+- the container should exit rather than growing without bound
+
+From the host, you can also inspect the cgroup value while the container is running:
+
+```bash
+cat /sys/fs/cgroup/tiny-docker/<container-id>/memory.max
+```
+
+For a `64m` run, that file should contain `67108864`.
+
 ## Design notes
 
 - `cmd/` contains only the entrypoint.
@@ -239,4 +318,5 @@ Good next directions:
 
 - support detached execution
 - improve filesystem isolation beyond basic `chroot`
+- record more runtime state such as cgroup paths or exit codes
 - add background container supervision and reaping

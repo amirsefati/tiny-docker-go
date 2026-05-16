@@ -30,13 +30,14 @@ func (s *MetadataStore) NewContainer(request RunRequest) (ContainerConfig, error
 	}
 
 	return ContainerConfig{
-		ID:        id,
-		Command:   strings.Join(append([]string{request.Command}, request.Args...), " "),
-		Hostname:  request.Hostname,
-		RootFS:    request.RootFS,
-		Status:    StatusCreated,
-		CreatedAt: time.Now().UTC(),
-		PID:       0,
+		ID:          id,
+		Command:     strings.Join(append([]string{request.Command}, request.Args...), " "),
+		Hostname:    request.Hostname,
+		RootFS:      request.RootFS,
+		MemoryLimit: request.Memory,
+		Status:      StatusCreated,
+		CreatedAt:   time.Now().UTC(),
+		PID:         0,
 	}, nil
 }
 

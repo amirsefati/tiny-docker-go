@@ -18,6 +18,7 @@ const (
 type RunRequest struct {
 	Hostname string
 	RootFS   string
+	Memory   string
 	Command  string
 	Args     []string
 }
@@ -31,13 +32,14 @@ type ProcessInfo struct {
 }
 
 type ContainerConfig struct {
-	ID        string          `json:"id"`
-	Command   string          `json:"command"`
-	Hostname  string          `json:"hostname"`
-	RootFS    string          `json:"rootfs"`
-	Status    ContainerStatus `json:"status"`
-	CreatedAt time.Time       `json:"created_at"`
-	PID       int             `json:"pid"`
+	ID          string          `json:"id"`
+	Command     string          `json:"command"`
+	Hostname    string          `json:"hostname"`
+	RootFS      string          `json:"rootfs"`
+	MemoryLimit string          `json:"memory_limit,omitempty"`
+	Status      ContainerStatus `json:"status"`
+	CreatedAt   time.Time       `json:"created_at"`
+	PID         int             `json:"pid"`
 }
 
 type Service interface {
