@@ -65,12 +65,45 @@ func (s *LocalService) Run(ctx context.Context, request RunRequest) error {
 		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS,
 	}
 
+	cgroup, err := newCgroupManager(container.ID)
+	if err != nil {
+		container.Status = StatusStopped
+		if saveErr := s.store.Save(container); saveErr != nil {
+			return fmt.Errorf("create container cgroup: %w (metadata update failed: %v)", err, saveErr)
+		}
+
+		return fmt.Errorf("create container cgroup: %w", err)
+	}
+	defer func() {
+		_ = cgroup.Cleanup()
+	}()
+
+	if err := cgroup.ApplyMemoryLimit(request.Memory); err != nil {
+		container.Status = StatusStopped
+		if saveErr := s.store.Save(container); saveErr != nil {
+			return fmt.Errorf("configure container cgroup: %w (metadata update failed: %v)", err, saveErr)
+		}
+
+		return fmt.Errorf("configure container cgroup: %w", err)
+	}
+
 	if err := cmd.Start(); err != nil {
 		container.Status = StatusStopped
 		if saveErr := s.store.Save(container); saveErr != nil {
 			return fmt.Errorf("start container init: %w (metadata update failed: %v)", err, saveErr)
 		}
 		return fmt.Errorf("start container init: %w", err)
+	}
+
+	if err := cgroup.AddProcess(cmd.Process.Pid); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		container.Status = StatusStopped
+		if saveErr := s.store.Save(container); saveErr != nil {
+			return fmt.Errorf("attach container to cgroup: %w (metadata update failed: %v)", err, saveErr)
+		}
+
+		return fmt.Errorf("attach container to cgroup: %w", err)
 	}
 
 	container.Status = StatusRunning
